@@ -1,3 +1,31 @@
+# Evidências:
+
+Capturas de tela de 06/11/2026.
+
+**Instância EC2 em execução**
+
+![Instância EC2 em execução](docs/evidencias/2026-11-06/ec2-instancia.png)
+
+**Detalhes da instância e perfil IAM**
+
+![Detalhes da instância e perfil IAM](docs/evidencias/2026-11-06/ec2-detalhes.png)
+
+**Regras de entrada e saída da instância**
+
+![Regras de entrada e saída da instância](docs/evidencias/2026-11-06/ec2-regras-seguranca.png)
+
+**Security Group com entrada HTTP na porta 80**
+
+![Security Group com entrada HTTP na porta 80](docs/evidencias/2026-11-06/security-group.png)
+
+**Pull Request integrado com CI aprovada**
+
+![Pull Request integrado com CI aprovada](docs/evidencias/2026-11-06/pr-ci-aprovada.png)
+
+**Endpoint público /health respondendo com status ok**
+
+![Endpoint público /health respondendo com status ok](docs/evidencias/2026-11-06/health.png)
+
 # Cloud Tasks API — Projeto Final de Computação em Nuvem
 
 Aplicação Flask/SQLite preparada para um laboratório de **CI/CD com GitHub Actions, Docker, GHCR e AWS EC2**. A base contém código, testes e workflows; cabe ao grupo aprovisionar a nuvem, configurar segredos, usar branches/PRs, implementar uma evolução funcional e comprovar a esteira.
