@@ -6,39 +6,61 @@ on:
     branches: [main]
 permissions:
   contents: read
+concurrency: deploy-production
 jobs:
   deploy:
     # Only successful CI runs started by pushes to main.
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
     runs-on: ubuntu-latest
     environment: production
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-      - name: Set up SSH credentials and verify host identity
+      - name: Deploy immutable image through Systems Manager
+        id: deploy
         env:
-          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
-        run: |
-          test -n "$SSH_KEY" && test -n "$KNOWN_HOSTS"
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
-          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
-      - name: Deploy immutable image
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ vars.EC2_USER }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
           DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${DEPLOY_SHA}"
-          test -n "$EC2_HOST" && test -n "$EC2_USER"
-          # Expected values are host/user, not arbitrary SSH options.
-          [[ "$EC2_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
-          [[ "$EC2_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "${EC2_USER}@${EC2_HOST}"             "bash -s -- '${IMAGE}'" < scripts/deploy.sh
+          test -n "$AWS_REGION" && test -n "$EC2_INSTANCE_ID"
+          aws sts get-caller-identity --query Account --output text
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import shlex
+
+          image = f"ghcr.io/{os.environ['GITHUB_REPOSITORY'].lower()}:{os.environ['DEPLOY_SHA']}"
+          script = Path("scripts/deploy.sh").read_text()
+          parameters = {
+              "commands": [f"bash -c {shlex.quote(script)} -- {shlex.quote(image)}"],
+              "executionTimeout": ["90"],
+          }
+          Path(os.environ["RUNNER_TEMP"], "deploy-parameters.json").write_text(json.dumps(parameters))
+          PY
+          COMMAND_ID="$(aws ssm send-command \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters "file://$RUNNER_TEMP/deploy-parameters.json" \
+            --comment "Deploy ${DEPLOY_SHA}" \
+            --query Command.CommandId --output text)"
+          if ! aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$EC2_INSTANCE_ID"; then
+            aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$EC2_INSTANCE_ID" \
+              --query '{Status:Status,Stdout:StandardOutputContent,Stderr:StandardErrorContent}'
+            exit 1
+          fi
+          aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$EC2_INSTANCE_ID" \
+            --query StandardOutputContent --output text
+          HOST="$(aws ec2 describe-instances --instance-ids "$EC2_INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)"
+          echo "host=$HOST" >> "$GITHUB_OUTPUT"
       - name: Verify remote endpoint
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_HOST: ${{ steps.deploy.outputs.host }}
         run: curl --fail --show-error --retry 10 --retry-delay 3 "http://${EC2_HOST}/health"
